@@ -9,6 +9,8 @@
 % issue is that the cells aren't really all in the same focal plane, and
 % there's that ugly line running through the middle.
 
+% Replace all my 17s with the stackSize variable.
+
 clc
 clear variables
 
@@ -27,9 +29,9 @@ for k=1:numImages
     Imax = imread([pwd, '/MAX_', imageNames{k}, '.tif']);
 
     % Read the image plane-by-plane
-    I = cell(17,1);
+    I = cell(stackSize,1);
 
-    for i=1:17
+    for i=1:stackSize
         I{i} = imread([pwd, '/', imageNames{k}, '.tif'], i);
     end
 
@@ -40,8 +42,9 @@ for k=1:numImages
     threshold = adaptthresh(Imax,0.15);
     MAXbinary = imbinarize(Imax, threshold);
 
-    figure(2*k-1);
-    imshow(MAXbinary,'InitialMagnification','Fit');
+    % Uncomment when testing thresholding.
+    % figure(2*k-1);
+    % imshow(MAXbinary,'InitialMagnification','Fit');
 
     % remove any objects that contact the border of the image
     MAXbinary = imclearborder(MAXbinary, 4);
@@ -61,8 +64,10 @@ for k=1:numImages
     idx = find([stats.Area] > (medianArea / nucleusSizeTolerance) & [stats.Area] < (medianArea * nucleusSizeTolerance) & [stats.Eccentricity] < 0.8); 
     MAXbinary = ismember(labelmatrix(cc), idx);
 
-    figure(2*k);
-    imshow(MAXbinary,'InitialMagnification','Fit');
+    
+    % Uncomment when testing thresholding.
+    % figure(2*k);
+    % imshow(MAXbinary,'InitialMagnification','Fit');
 
     %% Compute Background Intensity Value for each Plane
     % The values that I'm getting are 900-1000, which seem on the high side.
@@ -73,23 +78,23 @@ for k=1:numImages
     % background autofluorescence in cells that didn't have PCNA (this would 
     % have to be a fair bit higher than 425, so maybe my value is ok-ish).
 
-    backgroundInt = zeros(17,1);
+    backgroundInt = zeros(stackSize,1);
 
-    for i=1:17
+    for i=1:stackSize
         backgroundRegions = uint16(imcomplement(MAXbinary));
         numBackgroundPixels = sum(sum(backgroundRegions));
         backgroundInt(i) = sum(sum(backgroundRegions .* I{i})) / numBackgroundPixels;
     end
 
     %% Compute the Integrated Intensity in each Plane for each Nucleus
-    intensityStructs = cell(17,1);
-    pixelValueArrays = cell(17,1);
+    intensityStructs = cell(stackSize,1);
+    pixelValueArrays = cell(stackSize,1);
 
-    for i=1:17
+    for i=1:stackSize
         intensityStructs{i} = regionprops(MAXbinary, I{i}, 'PixelValues');
     end
 
-    for i=1:17
+    for i=1:stackSize
         pixelValueArrays{i} = table2array(struct2table(intensityStructs{i}));
     end
 
@@ -100,7 +105,7 @@ for k=1:numImages
     for i=1:size(pixelValueArrays{1},1)
         highestIntensity = 0;
 
-        for j=1:17
+        for j=1:stackSize
             pixels = pixelValueArrays{j}{i};
             intensityInThisPlane = sum(pixels) - (backgroundInt(j) * size(pixels,1));
             highestIntensity = max([highestIntensity, intensityInThisPlane]);
@@ -112,16 +117,40 @@ for k=1:numImages
     allCopyNumbers{k} = copyNumbers;
 end
 
-%% Output Histograms
+%% Output Results
 % pretty these up SIGNIFICANTLY, and find good ways to display the mean or
 % median. consider doing the 1D scatter plot thingy that papers seem to
 % love doing
 
-for i=1:k
-    figure(2*numImages+i)
-    histogram(allCopyNumbers{i});
-    disp(median(allCopyNumbers{i}));
+figure(2*numImages)
+
+for i=1:numImages
+    pointsPerImage(i) = size(allCopyNumbers{i}, 1);
 end
+
+xvals = [];
+yvals = [];
+means = zeros(4,1);
+stdevs = zeros(4,1);
+
+for i=1:numImages
+    xvals = [xvals; i*ones(pointsPerImage(i),1) - 0.125 + 0.25 * rand(pointsPerImage(i),1)];
+    yvals = [yvals; allCopyNumbers{i}];
+    means(i) = mean(allCopyNumbers{i});
+    stdevs(i) = std(allCopyNumbers{i}); 
+end
+
+scatter(xvals, yvals, 20, 'filled');
+hold on
+
+% Plot standard error bars
+xlim([0.5, numImages + 0.5]);
+xlabel('Image Number');
+ylabel('PCNA Copy Number');
+xticks(1:numImages);
+title('PCNA Copy Number per Nucleus');
+
+errorbar(1:numImages, means, stdevs, '+m', 'LineWidth', 3, 'CapSize', 20);
 
 %% Debug Thresholding
 %BWoutline = bwperim(MAXbinary); 
