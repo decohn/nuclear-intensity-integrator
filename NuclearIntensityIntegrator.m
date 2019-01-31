@@ -9,16 +9,20 @@
 % issue is that the cells aren't really all in the same focal plane, and
 % there's that ugly line running through the middle.
 
-% Replace all my 17s with the stackSize variable.
+% Figure out whether or not standard deviation or standard error is the
+% appropriate thing to use for my error bars.
+
+% Change background intensity calculation to function on a cell-by-cell basis.
 
 clc
 clear variables
 
 %% Configuration Variables
-intensityPerFPMolecule = 3500;
+intensityPerFPMolecule = 155;
 stackSize = 17;
 nucleusSizeTolerance = 2.5;
-imageNames = {'PCNA_1s_100%_1', 'PCNA_1s_100%_2', 'PCNA_1s_100%_3', 'PCNA_1s_100%_4'};
+imageNames = {'PCNA_1s_100%_1','PCNA_1s_100%_2','PCNA_1s_100%_3','PCNA_1s_100%_4'};
+proteinName = 'PCNA';
 numImages = size(imageNames, 2);
 allCopyNumbers = cell(numImages,1);
 
@@ -36,21 +40,28 @@ for k=1:numImages
     end
 
     %% Segment Image into Individual Nuclei
-    % Multiplying graythresh by 1.2 seems plausible, as does using adaptthresh
-    % with a sensitivity of 0.15. I think the latter (for the most part) looks
-    % better.
-    threshold = adaptthresh(Imax,0.15);
+    % Optimal sensitivity value seems to vary by protein. Any way to do
+    % this programmatically? For PCNA: 0.15. For Mcm4: 0.25. PCNA
+    % sensitivity value honestly might be a little on the large side? But
+    % how on Earth could you possibly quantify that sort of thing? This is
+    % why I don't like having a sensitivity parameter in the first place.
+    % Other effective ways to do this thresholding?
+    threshold = adaptthresh(Imax,0.25);
     MAXbinary = imbinarize(Imax, threshold);
 
     % Uncomment when testing thresholding.
-    % figure(2*k-1);
-    % imshow(MAXbinary,'InitialMagnification','Fit');
+    figure(4*k-3);
+    imshow(MAXbinary,'InitialMagnification','Fit');
+    
+    % fill in any holes in objects
+    MAXbinary = imfill(MAXbinary, 'holes');
+    
+    % collect all background pixels by obtaining a copy of the original
+    % image where the nuclei have their pixel intensity set to zero
+    allBackground = uint16(imcomplement(MAXbinary));
 
     % remove any objects that contact the border of the image
     MAXbinary = imclearborder(MAXbinary, 4);
-
-    % fill in any holes in objects
-    MAXbinary = imfill(MAXbinary, 'holes');
 
     % make measurements for all objects remaining in the image
     cc = bwconncomp(MAXbinary);
@@ -64,28 +75,56 @@ for k=1:numImages
     idx = find([stats.Area] > (medianArea / nucleusSizeTolerance) & [stats.Area] < (medianArea * nucleusSizeTolerance) & [stats.Eccentricity] < 0.8); 
     MAXbinary = ismember(labelmatrix(cc), idx);
 
-    
     % Uncomment when testing thresholding.
-    % figure(2*k);
-    % imshow(MAXbinary,'InitialMagnification','Fit');
-
+    figure(4*k-2);
+    imshow(MAXbinary,'InitialMagnification','Fit');
+    
     %% Compute Background Intensity Value for each Plane
-    % The values that I'm getting are 900-1000, which seem on the high side.
-    % Just by inspection, 'true background' seems to be in the vicinity of 425.
-    % It's really hard for me to decide whether I should be aiming for that
-    % true background, or whether it's ok that I have some bleed from the
-    % nucleus included in it. In reality, the ideal would be to know the
-    % background autofluorescence in cells that didn't have PCNA (this would 
-    % have to be a fair bit higher than 425, so maybe my value is ok-ish).
 
     backgroundInt = zeros(stackSize,1);
-
+    
     for i=1:stackSize
-        backgroundRegions = uint16(imcomplement(MAXbinary));
-        numBackgroundPixels = sum(sum(backgroundRegions));
-        backgroundInt(i) = sum(sum(backgroundRegions .* I{i})) / numBackgroundPixels;
+        allBackgroundPixels = allBackground .* I{i};
+        
+        % set this sensitivity as high as possible without getting a bunch
+        % of background pixels included in the foreground. Some room for
+        % improvement here: is there a way to crank up the sensitivity to
+        % get more of the cell body, and then discard the isolated pixels
+        % that lie in the background? Note that unfortunately the regions
+        % found in cellularBackgrounds cannot be filled, because then they
+        % will actually fill in the nuclei in their centres! Looking at the
+        % thresholding results, I don't even think that filling would help
+        % (even if the nuclei weren't an issue). The thresholding genuinely
+        % seems extremely good.
+        threshold = adaptthresh(allBackgroundPixels, 0.35);
+        cellularBackgrounds = uint16(imbinarize(allBackgroundPixels, threshold));
+        cellularBackgroundsGray = cellularBackgrounds .* I{i};
+        
+        cellularBackgroundsGray = cellularBackgroundsGray(cellularBackgroundsGray > 0);
+        
+        backgroundInt(i) = mean(mean(cellularBackgroundsGray));
+        
+        if(i == 9)
+            figure(4*k-1)
+            imshow(imadjust(cellularBackgrounds), 'InitialMagnification', 'Fit');
+            BWoutline = bwperim(cellularBackgrounds);
+            allBackgroundPixels(BWoutline) = 0;
+            %imshow(imadjust(allBackgroundPixels),'InitialMagnification','Fit');
+        end
+        
+        % This is the old background computation method, which just
+        % averaged together the values of all pixels that were not in the
+        % nucleus. 
+        %backgroundRegions = uint16(imcomplement(MAXbinary));
+        %numBackgroundPixels = sum(sum(backgroundRegions));
+        %backgroundInt(i) = sum(sum(backgroundRegions .* I{i})) / numBackgroundPixels;
     end
 
+    BWoutline = bwperim(MAXbinary); 
+    Imax(BWoutline) = 0; 
+    figure(4*k) 
+    imshow(imadjust(Imax),'InitialMagnification','Fit');
+    
     %% Compute the Integrated Intensity in each Plane for each Nucleus
     intensityStructs = cell(stackSize,1);
     pixelValueArrays = cell(stackSize,1);
@@ -122,7 +161,7 @@ end
 % median. consider doing the 1D scatter plot thingy that papers seem to
 % love doing
 
-figure(2*numImages)
+figure(4*numImages + 1)
 
 for i=1:numImages
     pointsPerImage(i) = size(allCopyNumbers{i}, 1);
@@ -130,14 +169,14 @@ end
 
 xvals = [];
 yvals = [];
-means = zeros(4,1);
-stdevs = zeros(4,1);
+means = zeros(numImages,1);
+stdevs = zeros(numImages,1);
 
 for i=1:numImages
     xvals = [xvals; i*ones(pointsPerImage(i),1) - 0.125 + 0.25 * rand(pointsPerImage(i),1)];
     yvals = [yvals; allCopyNumbers{i}];
     means(i) = mean(allCopyNumbers{i});
-    stdevs(i) = std(allCopyNumbers{i}); 
+    stdevs(i) = std(allCopyNumbers{i}) / sqrt(pointsPerImage(i)); 
 end
 
 scatter(xvals, yvals, 20, 'filled');
@@ -146,14 +185,25 @@ hold on
 % Plot standard error bars
 xlim([0.5, numImages + 0.5]);
 xlabel('Image Number');
-ylabel('PCNA Copy Number');
+ylabel([proteinName ,' Copy Number']);
 xticks(1:numImages);
-title('PCNA Copy Number per Nucleus');
-
+title([proteinName, ' Copy Number per Nucleus']);
 errorbar(1:numImages, means, stdevs, '+m', 'LineWidth', 3, 'CapSize', 20);
 
-%% Debug Thresholding
-%BWoutline = bwperim(MAXbinary); 
-%Imax(BWoutline) = 0; 
-%figure(3) 
-%imshow(imadjust(Imax),'InitialMagnification','Fit');
+% Scatter plot with all points in one column
+figure(4*numImages+2)
+scatter(ones(sum(pointsPerImage), 1) - 0.125 + 0.25 * rand(sum(pointsPerImage), 1), yvals, 20, 'filled');
+hold on
+xlim([0.8,1.2]);
+ylabel([proteinName ,' Copy Number']);
+xticks([]);
+title([proteinName, ' Copy Number per Nucleus']);
+errorbar(1, mean(yvals), std(yvals) / sqrt(sum(pointsPerImage)), '+m', 'LineWidth', 3, 'CapSize', 20);
+
+%% Results
+% Median copy # for PCNA with 0.15 sensitivity and 155 intensity per FP
+% molecule, with smart adjustments for the cellular autofluorescence is 
+% 9140. The mean copy # is 11384.
+% Median copy # for Mcm4 with 0.25 sensitivity and 155 intensity per FP
+% molecule, with smart adjustments for the cellular autofluorescence is 
+% 662. The mean copy # is 696.
