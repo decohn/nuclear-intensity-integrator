@@ -7,12 +7,6 @@
 % there are better algorithms than graythresh and adaptthresh available to
 % me. 
 
-% Try to algorithmically force the code to attempt multiple different
-% thresholding values each time it is run? There's room to try and tweak
-% stuff during a program run, although it's very tough to get the code to
-% figure out on its own when the thresholding is just right. Would make it
-% easier for me to do it all by eye, at least.
-
 % Change background intensity calculation to function on a cell-by-cell basis.
 % Try segmenting the image into individual cells first? Otherwise, I'm not
 % sure how you could easily pair nuclei to cells. Compare YDC05 results
@@ -27,8 +21,8 @@ figureNumber = 1;
 intensityPerFPMolecule = 155;
 stackSize = 17;
 nucleusSizeTolerance = 2.5;
-imageNames = {'YDC06_1s_100%_1', 'YDC06_1s_100%_2', 'YDC06_1s_100%_3', 'YDC06_1s_100%_4'};
-proteinName = 'YDC06';
+imageNames = {'YDC05_1s_100%_1', 'YDC05_1s_100%_2', 'YDC05_1s_100%_3', 'YDC05_1s_100%_4'};
+proteinName = 'YDC05';
 useCFPChannel = 0;
 numImages = size(imageNames, 2);
 numThresholds = 20;
@@ -47,6 +41,14 @@ for k=1:numImages
     % Now, read the GFP channel plane-by-plane.
     I_GFP = readStack(proteinName, imageNames, k, stackSize);
     
+    % attempting to test whether averaging the planes will make
+    % thresholding easier. I'm not sure yet, leave this option open.
+    Imax = I_GFP{1};
+    for i=2:17
+        Imax = Imax + I_GFP{i};
+    end
+    Imax = Imax ./ 17;
+    
     %% Segment Image into Individual Nuclei
     % For PCNA: 0.15. For Mcm4: 0.25. For the CFP
     % channel: typically around 0.5, but this varies significantly from
@@ -59,7 +61,8 @@ for k=1:numImages
         MAXbinary{i+1} = segmentNuclei(Imax, i/numThresholds);
     end
     
-    % Displays the result of the initial thresholding.
+    % Displays the result of the initial thresholding. Make a smartImShow
+    % method that does this automatically.
     figure(figureNumber);
     imshow(MAXbinary{10},'InitialMagnification','Fit');
     figureNumber = figureNumber + 1;
@@ -124,8 +127,9 @@ end
 for i = 1:(numThresholds+1)
     figure(figureNumber);
     figureNumber = figureNumber + 1;
-        
-    makePlotsWithSeparateColumnsForEachImage(copyNumbersByObject(i, :), numImages, proteinName, i/numThresholds, useCFPChannel);
+    
+    sens = (i-1) ./ numThresholds;
+    makePlotsWithSeparateColumnsForEachImage(copyNumbersByObject(i, :), numImages, proteinName, sens, useCFPChannel);
 end
 
 %     
@@ -279,7 +283,8 @@ function noReturn = makePlotsWithSeparateColumnsForEachImage(copyNumbers, number
     xlabel('Image Number');
     ylabel([protein ,' Copy Number']);
     xticks(1:numberOfImages);
-    title([protein, ' Copy # per Nucleus with ', channel, ' sens=', sensitivity]);
+    % Can't concatenate doubles to a string?? is a cast needed?
+    title([protein, ' Copy # per Nucleus with ', channel, ' sens=', num2str(sensitivity)]);
     errorbar(1:numberOfImages, means, stdevs, '+m', 'LineWidth', 3, 'CapSize', 20); 
 end
 %% Results
