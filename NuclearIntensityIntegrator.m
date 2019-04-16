@@ -23,9 +23,14 @@ stackSize = 17;
 nucleusSizeTolerance = 2.5;
 imageNames = {'YDC05_1s_100%_1', 'YDC05_1s_100%_2', 'YDC05_1s_100%_3', 'YDC05_1s_100%_4'};
 proteinName = 'YDC05';
-useCFPChannel = 0;
+useCFPChannel = 1;
 numImages = size(imageNames, 2);
 numThresholds = 20;
+
+% The below value, in pixels, is used in order to determine which
+% thresholding sensitivity value is optimal.
+desiredNuclearArea = 595;
+
 allCopyNumbers = zeros(numImages,numThresholds+1);
 copyNumbersByObject = cell(numThresholds+1, numImages);
 
@@ -63,74 +68,74 @@ for k=1:numImages
     
     % Displays the result of the initial thresholding. Make a smartImShow
     % method that does this automatically.
-    figure(figureNumber);
-    imshow(MAXbinary{10},'InitialMagnification','Fit');
-    figureNumber = figureNumber + 1;
+    % figure(figureNumber);
+    % imshow(MAXbinary{10},'InitialMagnification','Fit');
+    % figureNumber = figureNumber + 1;
     
-    % Filters each binary mask and collects background pixels.
+    % Filters each binary mask, collects background pixels, and finds
+    % the median area of every object that is left for each filtered
+    % image. Selects (and continues with) the filtered image whose median
+    % object area is closest to the desired area. This is how the program
+    % decides what sensitivity value to ultimately use for the
+    % thresholding.
+    medianArea = zeros(i,1);
+    
     for i=0:1:numThresholds
-        [MAXbinary{i+1}, allBackground{i+1}] = filterNuclei(MAXbinary{i+1}, nucleusSizeTolerance);
+        [MAXbinary{i+1}, allBackground{i+1}, medianArea(i+1)] = filterNuclei(MAXbinary{i+1}, nucleusSizeTolerance);
     end
     
+    % finds the index of MAXbinary that is best thresholded
+    [M,I] = min(abs(medianArea - desiredNuclearArea));
+    I = I(1);
+    
     % Uncomment when testing filtering.
-    figure(figureNumber);
-    imshow(MAXbinary{10},'InitialMagnification','Fit');
-    figureNumber = figureNumber + 1;
+    % figure(figureNumber);
+    % imshow(MAXbinary{10},'InitialMagnification','Fit');
+    % figureNumber = figureNumber + 1;
      
     %% Compute Background Intensity Value for each Plane
-    backgroundInt = zeros(stackSize, numThresholds + 1);
+    backgroundInt = zeros(i,1);
     
-    for i=1:stackSize
-        for j=1:(numThresholds+1)
-            if (i == 9 && j == 10)
-                boolDisplay = 1;
-            else
-                boolDisplay = 0;
-            end
-            
-            [backgroundInt(i, j), figureNumber] = getBkgrndInt(allBackground{j}, I_GFP{i}, 0.35, boolDisplay, figureNumber);          
-        end
+    for i=1:stackSize     
+        [backgroundInt(i), figureNumber] = getBkgrndInt(allBackground{I}, I_GFP{i}, 0.35, figureNumber);          
     end
     
     %% Compute the Integrated Intensity in each Plane for each Nucleus
-    for j = 1:(numThresholds+1)
-        totalIntensity = 0;
+    totalIntensity = 0;
         
-        % The purpose of this block is just to determine how many objects
-        % are in the binary image.
-        intensityStruct = regionprops(MAXbinary{j}, I_GFP{1}, 'PixelValues');    
-        pixelValues = table2array(struct2table(intensityStruct));    
-        numberOfObjects = size(pixelValues, 1);
+    % The purpose of this block is just to determine how many objects
+    % are in the binary image.
+    intensityStruct = regionprops(MAXbinary{I}, I_GFP{1}, 'PixelValues');    
+    pixelValues = table2array(struct2table(intensityStruct));    
+    numberOfObjects = size(pixelValues, 1);
         
-        integratedIntensitiesPerPlane = zeros(stackSize, numberOfObjects);
-        
-        for i = 1:stackSize
-            integratedIntensitiesPerPlane(i, :) = integrateIntensityPerObject(MAXbinary{j}, I_GFP{i}, backgroundInt(i,j));
-        end
-        
-        objectMaxIntensities = zeros(numberOfObjects, 1);
-        
-        for i = 1:numberOfObjects
-            objectIntensity = max(integratedIntensitiesPerPlane(:, i));
-            totalIntensity = totalIntensity + objectIntensity;
-            objectMaxIntensities(i, 1) = objectIntensity;
-        end
-        
-        copyNumbersByObject{j, k} = objectMaxIntensities ./ intensityPerFPMolecule;
-        
-        allCopyNumbers(k, j) = totalIntensity / numberOfObjects / intensityPerFPMolecule;
+    integratedIntensitiesPerPlane = zeros(stackSize, numberOfObjects);
+
+    for i = 1:stackSize
+        integratedIntensitiesPerPlane(i, :) = integrateIntensityPerObject(MAXbinary{I}, I_GFP{i}, backgroundInt(i));
     end
+
+    objectMaxIntensities = zeros(numberOfObjects, 1);
+
+    for i = 1:numberOfObjects
+        objectIntensity = max(integratedIntensitiesPerPlane(:, i));
+        totalIntensity = totalIntensity + objectIntensity;
+        objectMaxIntensities(i, 1) = objectIntensity;
+    end
+
+    copyNumbersByObject{k} = objectMaxIntensities ./ intensityPerFPMolecule;
+
+    allCopyNumbers(k) = totalIntensity / numberOfObjects / intensityPerFPMolecule;
 end
 % The above is the end of the main control loop.
     
 %% Output Results
-for i = 1:(numThresholds+1)
-    figure(figureNumber);
-    figureNumber = figureNumber + 1;
+
+figure(figureNumber);
+figureNumber = figureNumber + 1;
     
-    sens = (i-1) ./ numThresholds;
-    makePlotsWithSeparateColumnsForEachImage(copyNumbersByObject(i, :), numImages, proteinName, sens, useCFPChannel);
-end
+sens = (I-1) ./ numThresholds;
+makePlotsWithSeparateColumnsForEachImage(copyNumbersByObject, numImages, proteinName, sens, useCFPChannel);
 
 %     
 %     % Scatter plot with all points in one column
@@ -170,7 +175,9 @@ function maxBinaryMask = segmentNuclei(maxProjection, sensitivity)
         
     maxBinaryMask = imbinarize(maxProjection, threshold);
 end
-function [filteredBinaryMask, backgroundPixels] = filterNuclei(binaryMask, sizeTolerance)
+function [filteredBinaryMask, backgroundPixels, medianArea] = filterNuclei(binaryMask, sizeTolerance)
+    medianArea = -1;
+
     % fill in any holes in objects
     filteredBinaryMask = imfill(binaryMask, 'holes');
 
@@ -197,8 +204,9 @@ function [filteredBinaryMask, backgroundPixels] = filterNuclei(binaryMask, sizeT
     medianArea = median(allAreas);
     idx = find([stats.Area] > (medianArea / sizeTolerance) & [stats.Area] < (medianArea * sizeTolerance) & [stats.Eccentricity] < 0.8); 
     filteredBinaryMask = ismember(labelmatrix(cc), idx); 
+    medianArea = median(allAreas);
 end
-function [meanBackgroundIntensity, newFigNum] = getBkgrndInt(pixelLocations, greyscaleImage, sensitivity, boolDisplay, figNum)
+function [meanBackgroundIntensity, newFigNum] = getBkgrndInt(pixelLocations, greyscaleImage, sensitivity, figNum)
     allBackgroundPixels = pixelLocations .* greyscaleImage;
 
     % set this sensitivity as high as possible without getting a bunch
@@ -214,13 +222,9 @@ function [meanBackgroundIntensity, newFigNum] = getBkgrndInt(pixelLocations, gre
 
     meanBackgroundIntensity = mean(mean(cellularBackgroundsGray));
     
-    if (boolDisplay == 1)
-        figure(figNum)
-        imshow(imadjust(cellularBackgrounds), 'InitialMagnification', 'Fit');
-        newFigNum = figNum + 1;
-    else
-        newFigNum = figNum;
-    end
+    %figure(figNum)
+    %imshow(imadjust(cellularBackgrounds), 'InitialMagnification', 'Fit');
+    newFigNum = figNum;
 end
 function totalIntensities = integrateIntensityPerObject(nucleiLocations, greyScaleImage, backgroundLevel)
     intensityStruct = regionprops(nucleiLocations, greyScaleImage, 'PixelValues');    
@@ -254,7 +258,7 @@ function noReturn = makePlotsWithSeparateColumnsForEachImage(copyNumbers, number
     pointsPerImage = zeros(numberOfImages, 1);
     
     for i=1:numberOfImages
-         pointsPerImage(i) = size(copyNumbers{1, i}, 1);
+         pointsPerImage(i) = size(copyNumbers{i}, 1);
     end
 
     xvals = [];
@@ -264,9 +268,9 @@ function noReturn = makePlotsWithSeparateColumnsForEachImage(copyNumbers, number
 
     for i=1:numberOfImages
         xvals = [xvals; i*ones(pointsPerImage(i),1) - 0.125 + 0.25 * rand(pointsPerImage(i),1)];
-        yvals = [yvals; copyNumbers{1,i}];
-        means(i) = mean(copyNumbers{1,i});
-        stdevs(i) = std(copyNumbers{1,i}) / sqrt(pointsPerImage(i)); 
+        yvals = [yvals; copyNumbers{i}];
+        means(i) = mean(copyNumbers{i});
+        stdevs(i) = std(copyNumbers{i}) / sqrt(pointsPerImage(i)); 
     end
  
     scatter(xvals, yvals, 20, 'filled');
