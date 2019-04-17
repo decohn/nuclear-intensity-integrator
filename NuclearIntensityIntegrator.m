@@ -1,17 +1,9 @@
 %% Nuclear Intensity Integrator
 % See Github repository for README and more details regarding the project.
 
-% It looks like the main issue with this code is probably going to be
-% getting the thresholding of the nuclei correct. I think that using a max
-% projection has to be the correct way to do that, but I don't know if
-% there are better algorithms than graythresh and adaptthresh available to
-% me. 
-
 % Change background intensity calculation to function on a cell-by-cell basis.
 % Try segmenting the image into individual cells first? Otherwise, I'm not
-% sure how you could easily pair nuclei to cells. Compare YDC05 results
-% using CFP as the nuclear thresholder to those using GFP. Produce a
-% comparison table with all the different sensitivity values, etc.      
+% sure how you could easily pair nuclei to cells.      
 
 clc
 clear variables
@@ -21,9 +13,9 @@ figureNumber = 1;
 intensityPerFPMolecule = 155;
 stackSize = 17;
 nucleusSizeTolerance = 2.5;
-imageNames = {'YDC05_1s_100%_1', 'YDC05_1s_100%_2', 'YDC05_1s_100%_3', 'YDC05_1s_100%_4'};
-proteinName = 'YDC05';
-useCFPChannel = 1;
+imageNames = {'POL32_1s_100%_exp2_1', 'POL32_1s_100%_exp2_2', 'POL32_1s_100%_exp2_3', 'POL32_1s_100%_exp2_4'};
+proteinName = 'POL32';
+useCFPChannel = 0;
 numImages = size(imageNames, 2);
 numThresholds = 20;
 
@@ -31,7 +23,7 @@ numThresholds = 20;
 % thresholding sensitivity value is optimal.
 desiredNuclearArea = 595;
 
-allCopyNumbers = zeros(numImages,numThresholds+1);
+allCopyNumbers = zeros(numImages,1);
 copyNumbersByObject = cell(numThresholds+1, numImages);
 
 % This is the main control loop, which will perform analysis for each
@@ -40,24 +32,33 @@ for k=1:numImages
     %% Image Read
     
     % Read a max-projection in the channel that will be used to segment
-    % nuclei.
-    Imax = readMax(proteinName, imageNames, k, useCFPChannel);
+    % nuclei. For now, I'm proceeding with the averaging method. Change the
+    % name of the Imax variable to Iave once I make this decision
+    % permanent.
+    
+    % Imax = readMax(proteinName, imageNames, k, useCFPChannel);
    
     % Now, read the GFP channel plane-by-plane.
-    I_GFP = readStack(proteinName, imageNames, k, stackSize);
+    I_GFP = readStack(proteinName, imageNames, k, stackSize, 0);
     
-    % attempting to test whether averaging the planes will make
+    % Attempting to test whether averaging the planes will make
     % thresholding easier. I'm not sure yet, leave this option open.
-    Imax = I_GFP{1};
-    for i=2:17
-        Imax = Imax + I_GFP{i};
+    if(useCFPChannel == 0)
+        Imax = I_GFP{1};
+        for i=2:stackSize
+            Imax = Imax + I_GFP{i};
+        end
+    else
+        I_CFP = readStack(proteinName, imageNames, k, stackSize, 1);
+        Imax = I_CFP{1};
+        for i=2:stackSize
+            Imax = Imax + I_CFP{i};
+        end
     end
-    Imax = Imax ./ 17;
+    
+    Imax = Imax ./ stackSize;
     
     %% Segment Image into Individual Nuclei
-    % For PCNA: 0.15. For Mcm4: 0.25. For the CFP
-    % channel: typically around 0.5, but this varies significantly from
-    % image to image, which is a huge issue.
     MAXbinary = cell(numThresholds + 1, 1);
     allBackground = cell(numThresholds + 1, 1);
     
@@ -90,7 +91,7 @@ for k=1:numImages
     
     % Uncomment when testing filtering.
     % figure(figureNumber);
-    % imshow(MAXbinary{10},'InitialMagnification','Fit');
+    % imshow(MAXbinary{I},'InitialMagnification','Fit');
     % figureNumber = figureNumber + 1;
      
     %% Compute Background Intensity Value for each Plane
@@ -131,6 +132,9 @@ end
     
 %% Output Results
 
+% for quick and dirty output
+disp(mean(allCopyNumbers, 1));
+
 figure(figureNumber);
 figureNumber = figureNumber + 1;
     
@@ -158,11 +162,17 @@ function maxProjection = readMax(protein, imageNames, imageNum, boolCFP)
     
     maxProjection = imread([pwd, '/', protein, prefix, imageNames{imageNum}, '.tif']);   
 end
-function imagePlanes = readStack(protein, imageNames, imageNum, numPlanes)
+function imagePlanes = readStack(protein, imageNames, imageNum, numPlanes, boolCFP)
     imagePlanes = cell(numPlanes,1);
+    
+    if(boolCFP == 1)
+        suffix = '_CFP.tif';
+    else
+        suffix = '.tif';
+    end
 
     for i=1:numPlanes
-        imagePlanes{i} = imread([pwd, '/', protein, '/', imageNames{imageNum}, '.tif'], i);
+        imagePlanes{i} = imread([pwd, '/', protein, '/', imageNames{imageNum}, suffix], i);
     end
 end
 function maxBinaryMask = segmentNuclei(maxProjection, sensitivity)
@@ -288,16 +298,6 @@ function noReturn = makePlotsWithSeparateColumnsForEachImage(copyNumbers, number
     ylabel([protein ,' Copy Number']);
     xticks(1:numberOfImages);
     % Can't concatenate doubles to a string?? is a cast needed?
-    title([protein, ' Copy # per Nucleus with ', channel, ' sens=', num2str(sensitivity)]);
+    title([protein, ' Copy # per Nucleus using ', channel, ' channel.']);
     errorbar(1:numberOfImages, means, stdevs, '+m', 'LineWidth', 3, 'CapSize', 20); 
 end
-%% Results
-% Median copy # for PCNA with 0.15 sensitivity and 155 intensity per FP
-% molecule, with smart adjustments for the cellular autofluorescence is 
-% 9140. The mean copy # is 11384.
-% Median copy # for Mcm4 with 0.25 sensitivity and 155 intensity per FP
-% molecule, with smart adjustments for the cellular autofluorescence is 
-% 662. The mean copy # is 696.
-% Median copy # for YDC05 with automated sensitivity and 155 intensity per FP
-% molecule, with smart adjustments for the cellular autofluorescence, and
-% using the CFP channel for the nuclear thresholding, is 418. Mean is 476. 
