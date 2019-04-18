@@ -15,9 +15,11 @@ stackSize = 17;
 nucleusSizeTolerance = 2.5;
 imageNames = {'POL32_1s_100%_exp2_1', 'POL32_1s_100%_exp2_2', 'POL32_1s_100%_exp2_3', 'POL32_1s_100%_exp2_4'};
 proteinName = 'POL32';
-useCFPChannel = 0;
+useCFPChannel = 1;
+useMaxProjection = 0;
+planesToIgnoreInProjections = 4;
 numImages = size(imageNames, 2);
-numThresholds = 20;
+numThresholds = 100;
 
 % The below value, in pixels, is used in order to determine which
 % thresholding sensitivity value is optimal.
@@ -31,40 +33,42 @@ copyNumbersByObject = cell(numThresholds+1, numImages);
 for k=1:numImages
     %% Image Read
     
-    % Read a max-projection in the channel that will be used to segment
-    % nuclei. For now, I'm proceeding with the averaging method. Change the
-    % name of the Imax variable to Iave once I make this decision
-    % permanent.
-    
-    % Imax = readMax(proteinName, imageNames, k, useCFPChannel);
-   
     % Now, read the GFP channel plane-by-plane.
-    I_GFP = readStack(proteinName, imageNames, k, stackSize, 0);
+    I_GFP = uint16(readStack(proteinName, imageNames, k, stackSize, 0));
     
-    % Attempting to test whether averaging the planes will make
-    % thresholding easier. I'm not sure yet, leave this option open.
-    if(useCFPChannel == 0)
-        Imax = I_GFP{1};
-        for i=2:stackSize
-            Imax = Imax + I_GFP{i};
+    if(useMaxProjection == 0)
+        % Finds average projection of the channel that will be used for
+        % thresholding.
+        if(useCFPChannel == 0)
+            I_GFP_temp = I_GFP(:,:,(1+planesToIgnoreInProjections):(stackSize-planesToIgnoreInProjections));
+            Ithresh = sum(I_GFP_temp, 3);
+        else
+            I_CFP = readStack(proteinName, imageNames, k, stackSize, 1);
+            I_CFP_temp = I_CFP(:,:,(1+planesToIgnoreInProjections):(stackSize-planesToIgnoreInProjections));
+            Ithresh = sum(I_CFP_temp, 3);
         end
+    
+        Ithresh = uint16(Ithresh ./ (stackSize-(2*planesToIgnoreInProjections)));
     else
-        I_CFP = readStack(proteinName, imageNames, k, stackSize, 1);
-        Imax = I_CFP{1};
-        for i=2:stackSize
-            Imax = Imax + I_CFP{i};
+        % Finds maximum projection of the channel that will be used for
+        % thresholding.
+        if(useCFPChannel == 0)
+            I_GFP_temp = I_GFP(:,:,(1+planesToIgnoreInProjections):(stackSize-planesToIgnoreInProjections));
+            Ithresh = uint16(max(I_GFP_temp, [], 3));
+        else
+            I_CFP = uint16(readStack(proteinName, imageNames, k, stackSize, 1));
+            I_CFP_temp = I_CFP(:,:,(1+planesToIgnoreInProjections):(stackSize-planesToIgnoreInProjections));
+            Ithresh = uint16(max(I_CFP_temp, [], 3));
         end
     end
-    
-    Imax = Imax ./ stackSize;
-    
+        
     %% Segment Image into Individual Nuclei
     MAXbinary = cell(numThresholds + 1, 1);
     allBackground = cell(numThresholds + 1, 1);
     
     % Creates a bunch of binary masks, using different sensitivity values.
     for i=0:1:numThresholds
-        MAXbinary{i+1} = segmentNuclei(Imax, i/numThresholds);
+        MAXbinary{i+1} = segmentNuclei(Ithresh, i/numThresholds);
     end
     
     % Displays the result of the initial thresholding. Make a smartImShow
@@ -98,7 +102,7 @@ for k=1:numImages
     backgroundInt = zeros(i,1);
     
     for i=1:stackSize     
-        [backgroundInt(i), figureNumber] = getBkgrndInt(allBackground{I}, I_GFP{i}, 0.35, figureNumber);          
+        [backgroundInt(i), figureNumber] = getBkgrndInt(allBackground{I}, I_GFP(:,:,i), 0.35, figureNumber);          
     end
     
     %% Compute the Integrated Intensity in each Plane for each Nucleus
@@ -106,14 +110,14 @@ for k=1:numImages
         
     % The purpose of this block is just to determine how many objects
     % are in the binary image.
-    intensityStruct = regionprops(MAXbinary{I}, I_GFP{1}, 'PixelValues');    
+    intensityStruct = regionprops(MAXbinary{I}, I_GFP(:,:,1), 'PixelValues');    
     pixelValues = table2array(struct2table(intensityStruct));    
     numberOfObjects = size(pixelValues, 1);
         
     integratedIntensitiesPerPlane = zeros(stackSize, numberOfObjects);
 
     for i = 1:stackSize
-        integratedIntensitiesPerPlane(i, :) = integrateIntensityPerObject(MAXbinary{I}, I_GFP{i}, backgroundInt(i));
+        integratedIntensitiesPerPlane(i, :) = integrateIntensityPerObject(MAXbinary{I}, I_GFP(:,:,i), backgroundInt(i));
     end
 
     objectMaxIntensities = zeros(numberOfObjects, 1);
@@ -153,6 +157,7 @@ makePlotsWithSeparateColumnsForEachImage(copyNumbersByObject, numImages, protein
 %     errorbar(1, mean(yvals), std(yvals) / sqrt(sum(pointsPerImage)), '+m', 'LineWidth', 3, 'CapSize', 20);
 
 %% Functions
+% maxProjection currently not used
 function maxProjection = readMax(protein, imageNames, imageNum, boolCFP)
     if(boolCFP == 0)
         prefix = '/MAX_';
@@ -163,16 +168,19 @@ function maxProjection = readMax(protein, imageNames, imageNum, boolCFP)
     maxProjection = imread([pwd, '/', protein, prefix, imageNames{imageNum}, '.tif']);   
 end
 function imagePlanes = readStack(protein, imageNames, imageNum, numPlanes, boolCFP)
-    imagePlanes = cell(numPlanes,1);
-    
     if(boolCFP == 1)
         suffix = '_CFP.tif';
     else
         suffix = '.tif';
     end
+    
+    testPlane = imread([pwd, '/', protein, '/', imageNames{imageNum}, suffix], 1);
+    
+    imagePlanes = zeros([size(testPlane), numPlanes]);
+    imagePlanes(:,:,1) = testPlane;
 
-    for i=1:numPlanes
-        imagePlanes{i} = imread([pwd, '/', protein, '/', imageNames{imageNum}, suffix], i);
+    for i=2:numPlanes
+        imagePlanes(:,:,i) = imread([pwd, '/', protein, '/', imageNames{imageNum}, suffix], i);
     end
 end
 function maxBinaryMask = segmentNuclei(maxProjection, sensitivity)
